@@ -7,7 +7,7 @@ message: >-
   If you use this software, please cite it using the
   metadata from this file.
 type: software
-version: "7.2.3"
+version: "7.2.4"
 authors:
   - given-names: Tobias
     family-names: Baril

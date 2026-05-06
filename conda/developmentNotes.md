@@ -585,3 +585,107 @@ earlGrey -g test.fasta -s test_723_quiet2 -o . -t 16 -q yes 2>&1 | cat | grep -c
 earlGrey -g test.fasta -s test_723_noq -o . -t 16
 ```
 
+---
+
+# Version 7.2.4 — pipeline error handling, samplable genome size for RepeatModeler, and bash safety
+
+## Background
+
+Two complementary robustness improvements were identified and implemented across the three main Earl Grey pipeline scripts (`earlGrey`, `earlGreyLibConstruct`, `earlGreyAnnotationOnly`):
+
+1. The `deNovo1()` function in `earlGrey` and `earlGreyLibConstruct` used a deeply nested retry loop to work around RepeatModeler failures on small or fragmented genomes. This approach was reactive: RepeatModeler would run, fail, be retried with a smaller `-genomeSampleSizeMax`, fail again, and be retried once more — wasting potentially hours of compute and producing confusing log output. The ParTEA (pangenome) version of Earl Grey had already solved this more elegantly by pre-computing the samplable genome size and choosing the correct flag upfront.
+
+2. All three scripts lacked `set -eo pipefail`, meaning that any command that exited non-zero in the middle of a function body (outside an explicit `if` check) would silently be ignored and execution would continue into the next stage with corrupt or missing intermediate files. Additionally, two common shell idioms in the scripts would produce false failures under strict error handling: `expr N / 4` (returns exit code 1 when the result is 0) and `ls ... | head -n 1` pipelines (SIGPIPE exit 141 from `ls` when `head` exits early under `pipefail`).
+
+## Changes made
+
+### `earlGrey` and `earlGreyLibConstruct` — `deNovo1()` redesign
+
+The previous implementation:
+
+```bash
+deNovo1() {
+    RepeatModeler -threads ${ProcNum} -database ...
+    if [ ! -e ...-families.fa ]; then
+        echo "ERROR: Retrying with limit set as Round 5"
+        RepeatModeler ... -genomeSampleSizeMax 81000000
+        if [ ! -e ...-families.fa ]; then
+            echo "ERROR: Retrying with limit set as Round 4"
+            RepeatModeler ... -genomeSampleSizeMax 27000000
+            if [ ! -e ...-families.fa ]; then
+                echo "ERROR: RepeatModeler Failed" && exit 2
+            fi
+        fi
+    fi
+}
+```
+
+This ran RepeatModeler up to three times, each time with a smaller sampling cap, without any principled basis for which cap to choose. It also only covered two fallback tiers (rounds 5 and 4), leaving genomes smaller than 12 Mb (rounds 1–2) unhandled.
+
+The new implementation mirrors the approach used in ParTEA. Before invoking RepeatModeler, the samplable genome size is computed as the sum of all contigs ≥ 40 kb (the threshold below which RepeatModeler discards contigs during sampling). The appropriate `-genomeSampleSizeMax` cap is then derived from the cumulative RECON round thresholds and set in `SAMPLE_FLAG`. RepeatModeler is invoked exactly once with the correct flag, and a single post-run existence check is retained as a safety net.
+
+**Cumulative RECON round thresholds:**
+
+| Rounds supported | Cumulative threshold | Cap applied |
+|-----------------|---------------------|-------------|
+| All 6 rounds | ≥ 363 Mb (3+9+27+81+243) | none (default) |
+| Rounds 1–5 | ≥ 120 Mb (3+9+27+81) | `-genomeSampleSizeMax 81000000` |
+| Rounds 1–4 | ≥ 39 Mb (3+9+27) | `-genomeSampleSizeMax 27000000` |
+| Rounds 1–3 | ≥ 12 Mb (3+9) | `-genomeSampleSizeMax 9000000` |
+| Rounds 1–2 | < 12 Mb | `-genomeSampleSizeMax 3000000` |
+
+The samplable genome size is computed using `awk` directly on `$genome` (the `.prep` file, which is already available at the `deNovo1` call site):
+
+```bash
+GENOME_SIZE=$(awk '/^>/{if(len>=40000)sum+=len; len=0; next}{len+=length($0)} END{if(len>=40000)sum+=len; print sum+0}' "${genome}")
+```
+
+### `earlGrey`, `earlGreyLibConstruct`, `earlGreyAnnotationOnly` — `set -eo pipefail`
+
+`set -eo pipefail` was added immediately after `#!/bin/bash` in all three scripts.
+
+- `-e`: exits the script immediately if any simple command returns a non-zero exit code and is not part of a condition test.
+- `-o pipefail`: extends `-e` to pipelines — a pipeline fails if any stage within it returns non-zero, not just the last stage.
+
+Together these ensure that a failure in any tool invocation within a function body (RepeatMasker, BuildDatabase, TEstrainer, rcMergeRepeats, R scripts, etc.) will abort the pipeline at the point of failure rather than silently continuing to the next stage.
+
+### `earlGrey`, `earlGreyLibConstruct`, `earlGreyAnnotationOnly` — `expr` replaced with `$(( ))`
+
+All occurrences of `rmthreads=$(expr $ProcNum / 4)` and `strainthreads=$(expr $ProcNum / 4)` were replaced with the equivalent `$(( ProcNum / 4 ))`. The `expr` utility returns exit code 1 when the arithmetic result is 0, which occurs when `ProcNum < 4`. Under `set -e` this would abort the script before any tool was invoked if the user specified fewer than 4 threads.
+
+### `earlGrey`, `earlGreyLibConstruct`, `earlGreyAnnotationOnly` — `ls | head -n 1` pipeline fix
+
+All `ls -td ... | head -n 1` pipeline expressions used to retrieve the most recently created directory (TEstrainer output directories, HELIANO output directories) were appended with `|| true`:
+
+```bash
+latestFile="$(realpath $(ls -td -- ${OUTDIR}/${species}_strainer/*/ | head -n 1) || true)/..."
+```
+
+Under `pipefail`, when `head` exits after reading one line, `ls` receives SIGPIPE (exit code 141), causing the pipeline to return non-zero. This is expected behaviour — `ls` has more output but `head` is done — and `|| true` suppresses this signal without masking genuine `ls` errors (which would produce a different non-zero exit and an error message to stderr).
+
+## Static verification
+
+```bash
+cd /data/toby/EarlGrey
+
+# 1. Confirm set -eo pipefail is present in all three scripts
+grep -n 'set -eo pipefail' earlGrey earlGreyLibConstruct earlGreyAnnotationOnly
+
+# 2. Confirm no remaining expr calls
+grep -n 'expr' earlGrey earlGreyLibConstruct earlGreyAnnotationOnly
+
+# 3. Confirm ls|head pipelines are guarded
+grep -n 'head -n 1' earlGrey earlGreyLibConstruct earlGreyAnnotationOnly
+
+# 4. Confirm GENOME_SIZE and SAMPLE_FLAG logic is present in deNovo1
+grep -n 'GENOME_SIZE\|SAMPLE_FLAG' earlGrey earlGreyLibConstruct
+```
+
+**Expected for check 1:** Three lines, one per script, each showing `set -eo pipefail` at line 2.
+
+**Expected for check 2:** No output (all `expr` calls replaced).
+
+**Expected for check 3:** All matching lines should contain `|| true`.
+
+**Expected for check 4:** Both scripts should show `GENOME_SIZE` and `SAMPLE_FLAG` variable assignments and the five-tier `if/elif/else` block inside `deNovo1`.
+

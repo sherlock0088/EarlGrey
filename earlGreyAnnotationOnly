@@ -1,9 +1,10 @@
 #!/bin/bash
+set -eo pipefail
 
 usage()
 {
 	echo "	#############################
-	earlGrey version 7.2.3 (AnnotationOnly)
+	earlGrey version 7.2.4 (AnnotationOnly)
 	Required Parameters:
 		-g == genome.fasta
 		-s == species name
@@ -75,7 +76,7 @@ novoMask()
 {
 	if [ -z "$RepSpec" ]; then
 		cd ${OUTDIR}/${species}_RepeatMasker_Against_Custom_Library/
-		rmthreads=$(expr $ProcNum / 4)
+		rmthreads=$(( ProcNum / 4 ))
 		RepeatMasker -lib $latestFile -no_is -lcambig -s -a -pa $rmthreads -dir ${OUTDIR}/${species}_RepeatMasker_Against_Custom_Library/ $genome
 	else
 		mkdir -p $OUTDIR/${species}_Curated_Library/
@@ -83,7 +84,7 @@ novoMask()
 		cat $latestFile $RepSub > ${species}_combined_library.fasta
 		latestFile=$(realpath ${species}_combined_library.fasta)
 		cd ${OUTDIR}/${species}_RepeatMasker_Against_Custom_Library/
-		rmthreads=$(expr $ProcNum / 4)
+		rmthreads=$(( ProcNum / 4 ))
 		RepeatMasker -lib $latestFile -no_is -lcambig -s -a -pa $rmthreads -dir ${OUTDIR}/${species}_RepeatMasker_Against_Custom_Library/ $genome
 	fi
 }
@@ -400,7 +401,7 @@ if [ "$heli" == "yes" ]; then
 		heliano_optional
 	else
 		stage="HELITRON detection already complete, skipping..." && runningTea
-		helitron_gff="$(realpath $(ls -td -- ${OUTDIR}/${species}_heliano/*/ | head -n 1))/RC.representative.gff"
+		helitron_gff="$(realpath $(ls -td -- ${OUTDIR}/${species}_heliano/*/ | head -n 1) || true)/RC.representative.gff"
 		echo "HELITRON GFF: $helitron_gff"
 	fi
 	sleep 1

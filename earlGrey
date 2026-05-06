@@ -1,9 +1,10 @@
 #!/bin/bash
+set -eo pipefail
 
 usage()
 {
 	echo "	#############################
-	earlGrey version 7.2.3
+	earlGrey version 7.2.4
 	Required Parameters:
 		-g == genome.fasta
 		-s == species name
@@ -106,7 +107,7 @@ getRepeatMaskerFasta()
 firstMask()
 {
 	cd ${OUTDIR}/${species}_RepeatMasker
-        rmthreads=$(expr $ProcNum / 4)
+	rmthreads=$(( ProcNum / 4 ))
 	RepeatMasker -species $RepSpec -no_is -lcambig -s -a -pa $rmthreads -dir $OUTDIR/${species}_RepeatMasker $genome
 	if [ ! -f ${OUTDIR}/${species}_RepeatMasker/*.masked ]; then
 		echo "ERROR: RepeatMasker failed, please check logs. This is likely because of an invalid species search term, if issue persists please use NCBI Taxids (E.G Drosophila is replaced with 7125)"; exit 2
@@ -118,7 +119,7 @@ firstMask()
 firstMaskCustomLib()
 {
 	cd ${OUTDIR}/${species}_RepeatMasker
-	rmthreads=$(expr $ProcNum / 4)
+	rmthreads=$(( ProcNum / 4 ))
 	RepeatMasker -lib ${startCust} -no_is -lcambig -s -a -pa $rmthreads -dir $OUTDIR/${species}_RepeatMasker $genome
 	RepSub=${startCust}
 	if [ ! -f ${OUTDIR}/${species}_RepeatMasker/*.masked ]; then
@@ -141,22 +142,49 @@ buildDB()
 }
 
 # Subprocess deNovo1
-# Run the initial de novo annotation run with RepeatModeler2, with error catches for weird genome sizes
+# Run the initial de novo annotation run with RepeatModeler2.
+# The genomeSampleSizeMax flag is set based on the samplable genome size (contigs >= 40 kb)
+# to avoid RepeatModeler failures on small or fragmented genomes.
 deNovo1()
 {
 	cd ${OUTDIR}/${species}_RepeatModeler
-	RepeatModeler -threads ${ProcNum} -database ${OUTDIR}/${species}_Database/${species}
+
+	# Compute samplable genome size: sum of contigs >= 40 kb only.
+	# RepeatModeler discards contigs shorter than 40 kb during sampling, so using
+	# the total genome size would overestimate the sequence available per round.
+	GENOME_SIZE=$(awk '/^>/{if(len>=40000)sum+=len; len=0; next}{len+=length($0)} END{if(len>=40000)sum+=len; print sum+0}' "${genome}")
+	echo "Samplable genome size (contigs >= 40 kb): ${GENOME_SIZE} bp"
+
+	# Set -genomeSampleSizeMax to the highest RECON round threshold the genome
+	# can support. Thresholds are cumulative across rounds (r2=3M, r3=9M, r4=27M,
+	# r5=81M, r6=243M), so the samplable size must cover all rounds up to the cap:
+	#   >= 363M (3+9+27+81+243): no cap  -> all 6 rounds
+	#   >= 120M (3+9+27+81):     cap 81M  -> rounds 1-5
+	#   >=  39M (3+9+27):        cap 27M  -> rounds 1-4
+	#   >=  12M (3+9):           cap  9M  -> rounds 1-3
+	#   <   12M:                 cap  3M  -> rounds 1-2
+	SAMPLE_FLAG=""
+	if [ "${GENOME_SIZE}" -ge 363000000 ] 2>/dev/null; then
+		: # genome large enough for all rounds; use RepeatModeler default
+	elif [ "${GENOME_SIZE}" -ge 120000000 ] 2>/dev/null; then
+		echo "Capping at round 5 (-genomeSampleSizeMax 81000000)"
+		SAMPLE_FLAG="-genomeSampleSizeMax 81000000"
+	elif [ "${GENOME_SIZE}" -ge 39000000 ] 2>/dev/null; then
+		echo "Capping at round 4 (-genomeSampleSizeMax 27000000)"
+		SAMPLE_FLAG="-genomeSampleSizeMax 27000000"
+	elif [ "${GENOME_SIZE}" -ge 12000000 ] 2>/dev/null; then
+		echo "Capping at round 3 (-genomeSampleSizeMax 9000000)"
+		SAMPLE_FLAG="-genomeSampleSizeMax 9000000"
+	else
+		echo "Capping at round 2 (-genomeSampleSizeMax 3000000)"
+		SAMPLE_FLAG="-genomeSampleSizeMax 3000000"
+	fi
+
+	RepeatModeler -threads ${ProcNum} -database ${OUTDIR}/${species}_Database/${species} ${SAMPLE_FLAG}
+
 	if [ ! -e ${OUTDIR}/${species}_Database/${species}-families.fa ]; then
-		echo "ERROR: RepeatModeler Failed, Retrying with limit set as Round 5"
-		RepeatModeler -threads ${ProcNum} -database ${OUTDIR}/${species}_Database/${species} -genomeSampleSizeMax 81000000
-		if [ ! -e ${OUTDIR}/${species}_Database/${species}-families.fa ]; then
-			echo "ERROR: RepeatModeler Failed, Retrying with limit set as Round 4"
-			RepeatModeler -threads ${ProcNum} -database ${OUTDIR}/${species}_Database/${species} -genomeSampleSizeMax 27000000
-			if [ ! -e ${OUTDIR}/${species}_Database/${species}-families.fa ]; then
-				echo "ERROR: RepeatModeler Failed"
-				exit 2
-			fi
-		fi
+		echo "ERROR: RepeatModeler Failed"
+		exit 2
 	fi
 }
 
@@ -166,12 +194,12 @@ strainer()
 {
 	cd ${OUTDIR}/${species}_strainer/
 	if [ "$ProcNum" -ge 4 ]; then
-		strainthreads=$(expr $ProcNum / 4)
+		strainthreads=$(( ProcNum / 4 ))
 	else
 		strainthreads=$ProcNum
 	fi
 	${SCRIPT_DIR}/TEstrainer/TEstrainer_for_earlGrey.sh -g $genome -l ${OUTDIR}/${species}_Database/${species}-families.fa -t ${strainthreads} -f $Flank -r $num -n $no_seq -m $min_seq$([ "$quietBar" == "yes" ] && echo " -q")
-	latestFile="$(realpath $(ls -td -- ${OUTDIR}/${species}_strainer/*/ | head -n 1))/${species}-families.fa.strained"
+	latestFile="$(realpath $(ls -td -- ${OUTDIR}/${species}_strainer/*/ | head -n 1) || true)/${species}-families.fa.strained"
 	cp $latestFile ${OUTDIR}/${species}_strainer/
 }
 
@@ -185,12 +213,12 @@ strainerResume() {
 		exit 2
 	fi
 	if [ "$ProcNum" -ge 4 ]; then
-		strainthreads=$(expr $ProcNum / 4)
+		strainthreads=$(( ProcNum / 4 ))
 	else
 		strainthreads=$ProcNum
 	fi
 	${SCRIPT_DIR}/TEstrainer/TEstrainer_for_earlGrey.sh -g $genome -l ${OUTDIR}/${species}_Database/${species}-families.fa -t ${strainthreads} -f $Flank -r $num -n $no_seq -m $min_seq$([ "$quietBar" == "yes" ] && echo " -q") -d ${strainDataDir} -R
-	latestFile="$(realpath $(ls -td -- ${OUTDIR}/${species}_strainer/*/ | head -n 1))/${species}-families.fa.strained"
+	latestFile="$(realpath $(ls -td -- ${OUTDIR}/${species}_strainer/*/ | head -n 1) || true)/${species}-families.fa.strained"
 	cp $latestFile ${OUTDIR}/${species}_strainer/
 }
 
@@ -210,7 +238,7 @@ novoMask()
 {
 	if [ -z "$RepSpec" ] && [ -z "$startCust" ]; then
 		cd ${OUTDIR}/${species}_RepeatMasker_Against_Custom_Library/
-		rmthreads=$(expr $ProcNum / 4)
+		rmthreads=$(( ProcNum / 4 ))
 		RepeatMasker -lib $latestFile -no_is -lcambig -s -a -pa $rmthreads -dir ${OUTDIR}/${species}_RepeatMasker_Against_Custom_Library/ $genome
 	else
 		mkdir -p $OUTDIR/${species}_Curated_Library/
@@ -218,7 +246,7 @@ novoMask()
 		cat $latestFile $RepSub > ${species}_combined_library.fasta
 		latestFile=$(realpath ${species}_combined_library.fasta)
 		cd ${OUTDIR}/${species}_RepeatMasker_Against_Custom_Library/
-		rmthreads=$(expr $ProcNum / 4)
+		rmthreads=$(( ProcNum / 4 ))
 		RepeatMasker -lib $latestFile -no_is -lcambig -s -a -pa $rmthreads -dir ${OUTDIR}/${species}_RepeatMasker_Against_Custom_Library/ $genome
 	fi
 }
@@ -639,7 +667,7 @@ if [ "$heli" == "yes" ]; then
 		heliano_optional
 	else
 		stage="HELITRON detection already complete, skipping..." && runningTea
-		helitron_gff="$(realpath $(ls -td -- ${OUTDIR}/${species}_heliano/*/ | head -n 1))/RC.representative.gff"
+		helitron_gff="$(realpath $(ls -td -- ${OUTDIR}/${species}_heliano/*/ | head -n 1) || true)/RC.representative.gff"
 		echo "HELITRON GFF: $helitron_gff"
 	fi
 	sleep 1

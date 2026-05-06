@@ -431,3 +431,157 @@ earlGrey -g test.fasta -s mem_regression_test -o . -t 16
 **Observed:** Run completed without error (exit code 0). All memory-reduction changes are confirmed compatible with a full end-to-end EarlGrey pipeline run.
 
 This also passed successfully, confirming that Earl Grey is now compatible with Python 3.10 and does not have a dependency on Python 3.9. I will now update the documentation to reflect these changes and ensure that users are aware of the new dependencies when installing Earl Grey.
+
+---
+
+# Version 7.2.3 — bug fixes, robustness improvements, and `-q` quiet-bar flag
+
+## Background
+
+Several bugs were found and fixed after the v7.2.0 memory-refinement release. The changes also add a new `-q` flag to `earlGrey` to suppress the GNU parallel progress bar, which is useful when running jobs through batch schedulers (SLURM `sbatch`, PBS, etc.) where the ANSI escape codes written by `--bar` corrupt log files.
+
+## Changes made
+
+### `conda/meta.yaml`
+
+- Bumped version to `7.2.3`.
+- Added `numpy` to the `run` dependencies. `divergence_calc.py` now imports `numpy` directly (for `np.array_split`), so it must be declared explicitly.
+- Changed `source` from a remote tarball + SHA256 to `path: ..` to allow local conda builds during development without needing a published release tarball.
+
+### `earlGrey` (main pipeline script)
+
+**1. New `-q` flag to suppress the TEstrainer parallel progress bar**
+
+```bash
+earlGrey -g genome.fa -s myspecies -o outdir -t 16 -q yes
+```
+
+When `-q yes` is passed, `earlGrey` appends `-q` to the `TEstrainer_for_earlGrey.sh` invocation. This propagates to every GNU `parallel --bar` call inside TEstrainer, replacing `--bar` with nothing so the progress bar is omitted. Useful for `sbatch` jobs where `--bar` writes ANSI codes into log files.
+
+**2. Fixed `AF_UNIX` socket path-too-long crash in `divergence_calc.py`**
+
+`pybedtools.set_tempdir()` sets `tempfile.tempdir` globally, which is also used by `forkserver` as the base directory for its `AF_UNIX` socket. If the EarlGrey output path is deeply nested, the socket path can exceed the 108-character kernel limit, causing an `OSError: AF_UNIX path too long`. The fix creates a short per-run temp directory under `/tmp`:
+
+```bash
+divcalc_tmp="/tmp/egdiv_${species}"
+mkdir -p "${divcalc_tmp}"
+python .../divergence_calc.py ... -tmp "${divcalc_tmp}"
+# ...
+rm -rf "${divcalc_tmp}"
+```
+
+### `scripts/TEstrainer/TEstrainer_for_earlGrey.sh`
+
+Added a `-q` flag that sets `BAR_FLAG=""` (default `BAR_FLAG="--bar"`). The variable is substituted into every `parallel` call so a single flag controls all progress bars in the script.
+
+### `scripts/divergenceCalc/divergence_calc.py`
+
+**1. Added `import numpy as np`** — used for `np.array_split` (see below).
+
+**2. Replaced manual chunk splitting with `np.array_split`**
+
+The old code computed `chunk_size = int(rows / num_processes)` and stepped through the DataFrame with a fixed stride. For inputs where `rows` is not evenly divisible by `num_processes` this could silently drop up to `num_processes - 1` rows. `np.array_split` distributes any remainder evenly:
+
+```python
+chunks = [in_gff.iloc[idx] for idx in np.array_split(range(len(in_gff)), num_processes)]
+```
+
+**3. Replaced all path string concatenation with `os.path.join`**
+
+All occurrences of `temp_dir + "/subdir/" + name` have been replaced with `os.path.join(temp_dir, "subdir", name)`. This fixes `OSError`s that occurred when `args.temp_dir` was passed with a trailing slash (e.g. `/tmp/egdiv_myspecies/`), which caused double-slash paths like `//pybedtools` that could fail on some systems.
+
+### `scripts/filteringOverlappingRepeats.R`
+
+Fixed a crash that occurred when no nested TEs were found in the genome. The previous code unconditionally called `mutate()` and `bind_rows()` on `nested_only`, which threw an error when `nested_only` was an empty data frame. The fix wraps the nested-TE processing in an `if (nrow(nested_only) > 0)` guard and falls through to writing `unnested_only` directly when there are no nested elements:
+
+```r
+if (nrow(nested_only) > 0) {
+  nested_only <- nested_only %>%
+    mutate(attributes = paste0(attributes, ";nested=", nested, "-round", nesting_round)) %>%
+    select(-c(nested, nesting_round))
+  output.gff <- bind_rows(nested_only, unnested_only) %>% arrange(seqid, start)
+} else {
+  output.gff <- unnested_only %>% arrange(seqid, start)
+}
+```
+
+### `scripts/divergenceCalc/divergence_plot.R`
+
+Fixed crashes in the per-superfamily Kimura divergence plots when a TE class (DNA, LINE, LTR, SINE, PLE, RC) is absent from the genome. The previous code built each plot unconditionally and then caught errors with `try(ggplot_build(...))`. The new approach checks `!is.null(...)  && nrow(...) > 0` before constructing the ggplot object:
+
+```r
+if (!is.null(divergence_eg_tes_rounded_for_superfamily_plot[["DNA"]]) &&
+    nrow(divergence_eg_tes_rounded_for_superfamily_plot[["DNA"]]) > 0) {
+  kimura_superfamily_plot_1 <- ggplot(...) + ...
+} else {
+  kimura_superfamily_plot_1 <- NULL
+}
+```
+
+The axis-flipping logic was also updated to skip `NULL` plots rather than attempting to add `scale_x_continuous()` to them (which would previously crash).
+
+## Build and test environment
+
+Build the conda package from the local source tree:
+
+```bash
+cd /data/toby/EarlGrey/conda
+conda build .
+```
+
+Create a fresh environment and install:
+
+```bash
+conda create -n earlgrey_723_test -c conda-forge -c bioconda earlgrey --use-local
+conda activate earlgrey_723_test
+```
+
+Link the Dfam libraries and configure RepeatMasker:
+
+```bash
+ln -sf /data/toby/tools/earlgrey_databases/Libraries/famdb/* \
+    /data/toby/miniforge3/envs/earlgrey_723_test/share/RepeatMasker/Libraries/famdb/
+
+cd /data/toby/miniforge3/envs/earlgrey_723_test/share/RepeatMasker
+perl configure
+```
+
+### Static checks
+
+```bash
+cd /data/toby/EarlGrey
+
+# 1. Confirm numpy is in meta.yaml
+grep 'numpy' conda/meta.yaml
+
+# 2. Confirm -q flag is wired up in earlGrey
+grep -n 'quietBar\|BAR_FLAG\|\-q' earlGrey | head -20
+
+# 3. Confirm BAR_FLAG is used in TEstrainer_for_earlGrey.sh
+grep -n 'BAR_FLAG\|bar' scripts/TEstrainer/TEstrainer_for_earlGrey.sh | grep -v '#'
+
+# 4. Confirm os.path.join used throughout divergence_calc.py (no string concat with temp_dir)
+grep 'temp_dir *+' scripts/divergenceCalc/divergence_calc.py  # should return nothing
+
+# 5. Confirm np.array_split is used for chunking
+grep 'array_split' scripts/divergenceCalc/divergence_calc.py
+
+# 6. Confirm nrow guard in filteringOverlappingRepeats.R
+grep -n 'nrow(nested_only)' scripts/filteringOverlappingRepeats.R
+```
+
+### Functional tests
+
+```bash
+cd /data/toby/testDIR/
+
+# Basic run — confirm pipeline completes with -q yes
+earlGrey -g test.fasta -s test_723_quiet -o . -t 16 -q yes
+
+# Confirm no ANSI bar codes in the log (stdout should have no ESC sequences)
+earlGrey -g test.fasta -s test_723_quiet2 -o . -t 16 -q yes 2>&1 | cat | grep -c $'\033' || echo "No ANSI codes — good"
+
+# Confirm pipeline still works without -q (bar shown as before)
+earlGrey -g test.fasta -s test_723_noq -o . -t 16
+```
+

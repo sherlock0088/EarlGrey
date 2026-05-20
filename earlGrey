@@ -4,7 +4,7 @@ set -eo pipefail
 usage()
 {
 	echo "	#############################
-	earlGrey version 7.2.4
+	earlGrey version 7.2.5
 	Required Parameters:
 		-g == genome.fasta
 		-s == species name
@@ -193,12 +193,7 @@ deNovo1()
 strainer()
 {
 	cd ${OUTDIR}/${species}_strainer/
-	if [ "$ProcNum" -ge 4 ]; then
-		strainthreads=$(( ProcNum / 4 ))
-	else
-		strainthreads=$ProcNum
-	fi
-	${SCRIPT_DIR}/TEstrainer/TEstrainer_for_earlGrey.sh -g $genome -l ${OUTDIR}/${species}_Database/${species}-families.fa -t ${strainthreads} -f $Flank -r $num -n $no_seq -m $min_seq$([ "$quietBar" == "yes" ] && echo " -q")
+	${SCRIPT_DIR}/TEstrainer/TEstrainer_for_earlGrey.sh -g $genome -l ${OUTDIR}/${species}_Database/${species}-families.fa -t ${ProcNum} -f $Flank -r $num -n $no_seq -m $min_seq$([ "$quietBar" == "yes" ] && echo " -q")
 	latestFile="$(realpath $(ls -td -- ${OUTDIR}/${species}_strainer/*/ | head -n 1) || true)/${species}-families.fa.strained"
 	cp $latestFile ${OUTDIR}/${species}_strainer/
 }
@@ -212,12 +207,7 @@ strainerResume() {
 		echo "ERROR: There are more TEstrainer directories than expected present"
 		exit 2
 	fi
-	if [ "$ProcNum" -ge 4 ]; then
-		strainthreads=$(( ProcNum / 4 ))
-	else
-		strainthreads=$ProcNum
-	fi
-	${SCRIPT_DIR}/TEstrainer/TEstrainer_for_earlGrey.sh -g $genome -l ${OUTDIR}/${species}_Database/${species}-families.fa -t ${strainthreads} -f $Flank -r $num -n $no_seq -m $min_seq$([ "$quietBar" == "yes" ] && echo " -q") -d ${strainDataDir} -R
+	${SCRIPT_DIR}/TEstrainer/TEstrainer_for_earlGrey.sh -g $genome -l ${OUTDIR}/${species}_Database/${species}-families.fa -t ${ProcNum} -f $Flank -r $num -n $no_seq -m $min_seq$([ "$quietBar" == "yes" ] && echo " -q") -d ${strainDataDir} -R
 	latestFile="$(realpath $(ls -td -- ${OUTDIR}/${species}_strainer/*/ | head -n 1) || true)/${species}-families.fa.strained"
 	cp $latestFile ${OUTDIR}/${species}_strainer/
 }

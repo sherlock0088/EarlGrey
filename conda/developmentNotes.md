@@ -689,3 +689,59 @@ grep -n 'GENOME_SIZE\|SAMPLE_FLAG' earlGrey earlGreyLibConstruct
 
 **Expected for check 4:** Both scripts should show `GENOME_SIZE` and `SAMPLE_FLAG` variable assignments and the five-tier `if/elif/else` block inside `deNovo1`.
 
+---
+
+# Version 7.2.5 — TEstrainer thread-count fix and earlGreyLibConstruct quiet-bar support
+
+## Background
+
+Two issues were addressed:
+
+1. **Double division of threads passed to TEstrainer** (issue [#304](https://github.com/TobyBaril/EarlGrey/issues/304)): `earlGrey` and `earlGreyLibConstruct` were computing `strainthreads=$(( ProcNum / 4 ))` and passing this reduced count to `TEstrainer_for_earlGrey.sh`. Inside TEstrainer, the thread count is further divided by 4 to compute `MAFFT_THREADS` for parallel MAFFT jobs (each of which runs `mafft --thread 4`). This caused a double-divide: at 30 requested threads, TEstrainer received 7, then calculated `MAFFT_THREADS=1`, running only a single 4-thread MAFFT job at a time (4 actual CPU threads). The correct behaviour at 30 threads is `MAFFT_THREADS=7`, giving 7 × 4 = 28 concurrent MAFFT threads. The pre-division was a legacy artefact from a now-removed memory-heavy fork process in an older version of TEstrainer; its removal is safe because TEstrainer already has its own RAM-cap guard (`AVAIL_MEM_MB / 800` capping `THREADS` with a warning if a cap is applied).
+
+2. **Missing `-q` quietBar flag in `earlGreyLibConstruct`**: The `-q` flag to suppress TEstrainer's GNU parallel progress bar was added to `earlGrey` in v7.2.3, but was never propagated to `earlGreyLibConstruct`. Users running library-construction-only jobs had no way to suppress the progress bar for batch/sbatch workflows.
+
+## Changes made
+
+### `earlGrey` and `earlGreyLibConstruct` — TEstrainer thread-count fix
+
+Removed the `strainthreads=$(( ProcNum / 4 ))` calculation from both scripts and replaced the `-t ${strainthreads}` argument in the `strainer()` and `strainerResume()` function calls with `-t ${ProcNum}`, passing the full user-requested thread count directly to TEstrainer. TEstrainer's internal logic (`MAFFT_THREADS = THREADS / 4`, each MAFFT job using `--thread 4`) now correctly utilises the full CPU allocation:
+
+| Requested threads | Before fix (MAFFT CPU) | After fix (MAFFT CPU) |
+|---|---|---|
+| 8  | MAFFT_THREADS=1 → 4 threads | MAFFT_THREADS=2 → 8 threads |
+| 16 | MAFFT_THREADS=1 → 4 threads | MAFFT_THREADS=4 → 16 threads |
+| 30 | MAFFT_THREADS=1 → 4 threads | MAFFT_THREADS=7 → 28 threads |
+
+TEstrainer's existing RAM-cap guard ensures the full thread count is not applied when system memory is insufficient.
+
+### `earlGreyLibConstruct` — quietBar support added
+
+The `-q` flag was fully implemented in `earlGreyLibConstruct` to match the existing behaviour in `earlGrey`:
+
+- **Usage text**: added `-q == Suppress TEstrainer parallel progress bar (yes/no, Default: no, useful for batch/sbatch jobs)`
+- **`getopts`**: added `q:` to the option string and `q) quietBar=${OPTARG};;` to the case block
+- **`Checks()` validation**: added the same yes/no guard as `earlGrey`, defaulting to `no` with a warning on invalid input
+- **`strainer()` and `strainerResume()`**: both TEstrainer call sites now append `$([ "$quietBar" == "yes" ] && echo " -q")`, identical to the `earlGrey` implementation
+
+## Static verification
+
+```bash
+cd /data/toby/EarlGrey
+
+# 1. Confirm earlGrey and earlGreyLibConstruct pass ProcNum directly to TEstrainer (no pre-division)
+grep -n 'TEstrainer_for_earlGrey.sh.*-t' earlGrey earlGreyLibConstruct
+
+# 2. Confirm strainthreads is no longer present in either script
+grep -n 'strainthreads' earlGrey earlGreyLibConstruct  # should return nothing
+
+# 3. Confirm quietBar is fully implemented in earlGreyLibConstruct
+grep -n 'quietBar' earlGreyLibConstruct
+```
+
+**Expected for check 1:** All TEstrainer invocations in both scripts show `-t ${ProcNum}`.
+
+**Expected for check 2:** No output.
+
+**Expected for check 3:** Six matches — usage text, getopts case, `Checks()` validation (three lines), and both TEstrainer call sites.
+

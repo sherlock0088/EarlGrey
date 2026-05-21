@@ -715,6 +715,31 @@ Removed the `strainthreads=$(( ProcNum / 4 ))` calculation from both scripts and
 
 TEstrainer's existing RAM-cap guard ensures the full thread count is not applied when system memory is insufficient.
 
+---
+
+# Test dataset added (v7.2.5)
+
+## Background
+
+Users have frequently requested a way to verify that their Earl Grey installation is working correctly end-to-end, particularly after conda or Docker installs. A small but representative test genome is needed that:
+- Completes a full default-options run in a reasonable time (~30 minutes on a typical desktop)
+- Produces a meaningful TE annotation that exercises all pipeline stages
+- Has known expected outputs that can be used for comparison
+
+## Implementation
+
+Chromosome 1 of the Monarch Butterfly (*Danaus plexippus*; ~11 Mb) was selected as the test genome. It is small enough to run quickly but repeat-rich enough to exercise RepeatModeler, TEstrainer, RepeatMasker, RepeatCraft, and the divergence calculator.
+
+The test data were added to the `test/` directory of the repository:
+- `test/test.fasta` — chromosome 1 of *Danaus plexippus*
+- `test/test_summaryFiles.tar.gz` — expected `summaryFiles` output from a successful run with `earlGrey -g test/test.fasta -s test -o output_dir -t 16`
+
+The archive contains md5 checksums (`checksums.md5`) for all expected output files. Because RepeatModeler uses stochastic sampling, exact output files will vary between runs; users should compare the overall patterns in the high-level count table rather than expecting bitwise-identical results.
+
+Full instructions for running the test and interpreting results were added to the README under a new [Test Your Installation](#test-your-installation) section.
+
+---
+
 ### `earlGreyLibConstruct` — quietBar support added
 
 The `-q` flag was fully implemented in `earlGreyLibConstruct` to match the existing behaviour in `earlGrey`:

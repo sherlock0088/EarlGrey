@@ -11,6 +11,8 @@ Earl Grey is a full-automated transposable element (TE) annotation pipeline, lev
 
 [Changes in Latest Release](#changes-in-latest-release)
 
+[Test Your Installation](#test-your-installation)
+
 [Example Run](#example)
 
 [References and Acknowledgements](#references-and-acknowledgements)
@@ -46,8 +48,9 @@ os.environ['OPENBLAS_NUM_THREADS'] = '1'
 ```
 
 # Changes in Latest Release
-Earl Grey v7.2.5 fixes a thread-count double-division bug in TEstrainer (issue #304) and adds the `-q` quiet-bar flag to `earlGreyLibConstruct`:
+Earl Grey v7.2.5 fixes a thread-count double-division bug in TEstrainer (issue #304), adds the `-q` quiet-bar flag to `earlGreyLibConstruct`, and adds a test dataset for verifying installations:
 
+- **Test dataset added** (`test/`): chromosome 1 of the Monarch Butterfly (*Danaus plexippus*) is now provided in the `test/` directory alongside a compressed archive of expected summary outputs (`test_summaryFiles.tar.gz`). Users can run Earl Grey on this genome with default options and compare their results against the reference outputs to verify that their installation is working correctly. See the [Test Your Installation](#test-your-installation) section for full instructions.
 - **TEstrainer thread-count fix** (`earlGrey`, `earlGreyLibConstruct`, issue [#304](https://github.com/TobyBaril/EarlGrey/issues/304)): `earlGrey` and `earlGreyLibConstruct` were dividing the user-requested thread count by 4 (`strainthreads=$(( ProcNum / 4 ))`) before passing it to TEstrainer, which then performs its own internal `/4` division to compute `MAFFT_THREADS`. This double-divide meant that at 30 requested threads only 1 parallel MAFFT job ran (4 CPU threads) instead of the correct 7 (28 threads). The pre-division was a legacy artefact from a since-removed memory-heavy fork process; TEstrainer already has its own RAM-cap guard. Both scripts now pass `${ProcNum}` directly.
 - **`-q` quiet-bar flag added to `earlGreyLibConstruct`**: the `-q yes` flag to suppress the TEstrainer GNU parallel progress bar (introduced in v7.2.3 for `earlGrey`) was not propagated to `earlGreyLibConstruct`. Users running library-construction-only jobs can now pass `-q yes` to suppress the progress bar in batch/sbatch log files.
 
@@ -225,6 +228,40 @@ It is now possible to run some subroutines in Earl Grey (run either of these new
 
 Thank you for your continued support and enthusiasm for Earl Grey!
 
+# Test Your Installation
+
+To verify that your Earl Grey installation is working correctly, a test dataset is provided in the `test/` directory of this repository. The test genome is chromosome 1 of the Monarch Butterfly (*Danaus plexippus*), and expected output files from a successful run with default options are provided as a compressed archive.
+
+> **Note:** Due to the stochastic sampling nature of RepeatModeler, a degree of variation between your results and the reference outputs is expected. The overall patterns — TE classifications, approximate copy numbers, and genome coverage estimates — should be broadly similar, but exact values may differ between runs.
+
+### Running the test
+
+```bash
+# Remember to activate the conda environment before running
+conda activate earlgrey
+
+# Run Earl Grey on the test genome (chromosome 1 of the Monarch Butterfly).
+# This should complete in ~30 minutes on a typical desktop with 8 threads.
+earlGrey -g test/test.fasta -s test -o test/output_dir -t 8
+```
+
+### Checking your results
+
+Once the run is complete, extract the reference summary files and compare your outputs to those provided:
+
+```bash
+# Extract the expected results
+tar -xzf test/test_summaryFiles.tar.gz -C test/
+
+# The expected files will be extracted to test/test_summaryFiles/
+# Your results will be in test/output_dir/test_EarlGrey/test_summaryFiles/
+# check the example results extracted correctly using the md5 checksums provided in the tar archive
+md5sum -c test/test_summaryFiles/checksums.md5
+
+# Use these files to compare summaries and annotations. The best overview to check a successful run is to compare your high level count summary table to `test_summaryFiles/test.highLevelCount.kable`. 
+
+Because RepeatModeler performs random sampling of the genome to seed consensus building, the exact sequences in `test-families.fa.strained` and consequently the precise repeat coordinates in the GFF/BED files may vary between runs. If your results show broadly similar TE classifications and genome coverage values to the reference, your installation is working correctly. If the run fails to complete or the output is substantially different in overall TE content, please check the Earl Grey log files and consult the [issues page](https://github.com/TobyBaril/EarlGrey/issues).
+
 # Example
 
 Given an input genome, Earl Grey will run through numerous steps to identify, curate, and annotate transposable elements (TEs). We recommend running earlGrey within a tmux or screen session, so that you can log off and leave Earl Grey running.
@@ -247,7 +284,8 @@ Required Parameters:
 		-d == Create soft-masked genome at the end? (yes/no, Default: no)
 		-n == Max number of sequences used to generate consensus sequences (Default: 20)
 		-a == minimum number of sequences required to build a consensus sequence (Default: 3)
-                -e == Optional: Run HELIANO for detection of Helitrons (yes/no, Default: no)
+		-e == Run HELIANO as an optional step to detect Helitrons (yes/no, Default: no)
+		-q == Suppress TEstrainer parallel progress bar (yes/no, Default: no, useful for batch/sbatch jobs)
 		-h == Show help
 ```
 

@@ -203,7 +203,7 @@ strainer()
 strainerResume() {
 	cd ${OUTDIR}/${species}_strainer/
 	strainDataDir=$(find . -maxdepth 1 -type d -name "TS_${species}-families.fa_*")
-	if [ ! $(echo "$strainDataDir" | wc -l) -eq 1 ]; then
+	if [ -z "$strainDataDir" ] || [ ! $(echo "$strainDataDir" | wc -l) -eq 1 ]; then
 		echo "ERROR: There are more TEstrainer directories than expected present"
 		exit 2
 	fi

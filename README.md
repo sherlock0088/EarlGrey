@@ -258,7 +258,7 @@ tar -xzf test/test_summaryFiles.tar.gz -C test/
 # check the example results extracted correctly using the md5 checksums provided in the tar archive
 md5sum -c test/test_summaryFiles/checksums.md5
 
-# Use these files to compare summaries and annotations. The best overview to check a successful run is to compare your high level count summary table to `test_summaryFiles/test.highLevelCount.kable`. 
+# Use these files to compare summaries and annotations. The best overview to check a successful run is to compare your high level count summary table to `test/test_summaryFiles/test.highLevelCount.kable`. 
 ```
 
 Because RepeatModeler performs random sampling of the genome to seed consensus building, the exact sequences in `test-families.fa.strained` and consequently the precise repeat coordinates in the GFF/BED files may vary between runs. If your results show broadly similar TE classifications and genome coverage values to the reference, your installation is working correctly. If the run fails to complete or the output is substantially different in overall TE content, please check the Earl Grey log files and consult the [issues page](https://github.com/TobyBaril/EarlGrey/issues).

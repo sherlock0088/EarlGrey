@@ -11,6 +11,8 @@ Earl Grey is a full-automated transposable element (TE) annotation pipeline, lev
 
 [Changes in Latest Release](#changes-in-latest-release)
 
+[Test Your Installation](#test-your-installation)
+
 [Example Run](#example)
 
 [References and Acknowledgements](#references-and-acknowledgements)
@@ -50,6 +52,13 @@ os.environ['OPENBLAS_NUM_THREADS'] = '1'
 ```
 
 # Changes in Latest Release
+Earl Grey v7.2.5 fixes a thread-count double-division bug in TEstrainer (issue #304), adds the `-q` quiet-bar flag to `earlGreyLibConstruct`, and adds a test dataset for verifying installations:
+
+- **Test dataset added** (`test/`): chromosome 1 of the Monarch Butterfly (*Danaus plexippus*) is now provided in the `test/` directory alongside a compressed archive of expected summary outputs (`test_summaryFiles.tar.gz`). Users can run Earl Grey on this genome with default options and compare their results against the reference outputs to verify that their installation is working correctly. See the [Test Your Installation](#test-your-installation) section for full instructions.
+- **TEstrainer thread-count fix** (`earlGrey`, `earlGreyLibConstruct`, issue [#304](https://github.com/TobyBaril/EarlGrey/issues/304)): `earlGrey` and `earlGreyLibConstruct` were dividing the user-requested thread count by 4 (`strainthreads=$(( ProcNum / 4 ))`) before passing it to TEstrainer, which then performs its own internal `/4` division to compute `MAFFT_THREADS`. This double-divide meant that at 30 requested threads only 1 parallel MAFFT job ran (4 CPU threads) instead of the correct 7 (28 threads). The pre-division was a legacy artefact from a since-removed memory-heavy fork process; TEstrainer already has its own RAM-cap guard. Both scripts now pass `${ProcNum}` directly.
+- **`-q` quiet-bar flag added to `earlGreyLibConstruct`**: the `-q yes` flag to suppress the TEstrainer GNU parallel progress bar (introduced in v7.2.3 for `earlGrey`) was not propagated to `earlGreyLibConstruct`. Users running library-construction-only jobs can now pass `-q yes` to suppress the progress bar in batch/sbatch log files.
+
+### Previous Changes
 Earl Grey v7.2.4 improves pipeline robustness and RepeatModeler handling for small or fragmented genomes:
 
 - **Proactive RepeatModeler sampling cap** (`earlGrey`, `earlGreyLibConstruct`): the `deNovo1` function previously used a nested retry loop that ran RepeatModeler up to three times, falling back to progressively smaller `-genomeSampleSizeMax` values after each failure. It is now replaced by a single proactive run. The samplable genome size (sum of contigs ≥ 40 kb, the threshold below which RepeatModeler discards contigs) is computed upfront using `awk`, and the appropriate `-genomeSampleSizeMax` cap is derived from the cumulative RECON round thresholds (none for ≥ 363 Mb; 81 Mb for ≥ 120 Mb; 27 Mb for ≥ 39 Mb; 9 Mb for ≥ 12 Mb; 3 Mb for < 12 Mb). RepeatModeler runs exactly once with the correct flag, eliminating wasted compute on small or fragmented genomes.
@@ -223,6 +232,41 @@ It is now possible to run some subroutines in Earl Grey (run either of these new
 
 Thank you for your continued support and enthusiasm for Earl Grey!
 
+# Test Your Installation
+
+To verify that your Earl Grey installation is working correctly, a test dataset is provided in the `test/` directory of this repository. The test genome is chromosome 1 of the Monarch Butterfly (*Danaus plexippus*), and expected output files from a successful run with default options are provided as a compressed archive.
+
+> **Note:** Due to the stochastic sampling nature of RepeatModeler, a degree of variation between your results and the reference outputs is expected. The overall patterns — TE classifications, approximate copy numbers, and genome coverage estimates — should be broadly similar, but exact values may differ between runs.
+
+### Running the test
+
+```bash
+# Remember to activate the conda environment before running
+conda activate earlgrey
+
+# Run Earl Grey on the test genome (chromosome 1 of the Monarch Butterfly).
+# This should complete in ~30 minutes on a typical desktop with 8 threads.
+earlGrey -g test/test.fasta -s test -o test/output_dir -t 8
+```
+
+### Checking your results
+
+Once the run is complete, extract the reference summary files and compare your outputs to those provided:
+
+```bash
+# Extract the expected results
+tar -xzf test/test_summaryFiles.tar.gz -C test/
+
+# The expected files will be extracted to test/test_summaryFiles/
+# Your results will be in test/output_dir/test_EarlGrey/test_summaryFiles/
+# check the example results extracted correctly using the md5 checksums provided in the tar archive
+md5sum -c test/test_summaryFiles/checksums.md5
+
+# Use these files to compare summaries and annotations. The best overview to check a successful run is to compare your high level count summary table to `test/test_summaryFiles/test.highLevelCount.kable`. 
+```
+
+Because RepeatModeler performs random sampling of the genome to seed consensus building, the exact sequences in `test-families.fa.strained` and consequently the precise repeat coordinates in the GFF/BED files may vary between runs. If your results show broadly similar TE classifications and genome coverage values to the reference, your installation is working correctly. If the run fails to complete or the output is substantially different in overall TE content, please check the Earl Grey log files and consult the [issues page](https://github.com/TobyBaril/EarlGrey/issues).
+
 # Example
 
 Given an input genome, Earl Grey will run through numerous steps to identify, curate, and annotate transposable elements (TEs). We recommend running earlGrey within a tmux or screen session, so that you can log off and leave Earl Grey running.
@@ -245,7 +289,8 @@ Required Parameters:
 		-d == Create soft-masked genome at the end? (yes/no, Default: no)
 		-n == Max number of sequences used to generate consensus sequences (Default: 20)
 		-a == minimum number of sequences required to build a consensus sequence (Default: 3)
-                -e == Optional: Run HELIANO for detection of Helitrons (yes/no, Default: no)
+		-e == Run HELIANO as an optional step to detect Helitrons (yes/no, Default: no)
+		-q == Suppress TEstrainer parallel progress bar (yes/no, Default: no, useful for batch/sbatch jobs)
 		-h == Show help
 ```
 
@@ -387,13 +432,13 @@ If you would like to try Earl Grey, or prefer to use it in a browser, you can do
 
 Earl Grey version 6 uses Dfam 3.9. After installation, you MUST configure Dfam partitions as needed. Earl Grey will generate the script to do this and provide guidance when you run it for the first time. You need to specify which partitions of Dfam and/or RepBase to configure Earl Grey with. Choose partitions carefully as the combination will highly influence your results, especially if you want to pre-mask your input genome.
 
-Earl Grey version 7.2.4 (latest stable release) with all required and configured dependencies is found in the `biooconda` conda channel. To install, simply run the following depending on your installation:
+Earl Grey version 7.2.5 (latest stable release) with all required and configured dependencies is found in the `biooconda` conda channel. To install, simply run the following depending on your installation:
 ```
 # With conda
-conda create -n earlgrey -c conda-forge -c bioconda earlgrey=7.2.4
+conda create -n earlgrey -c conda-forge -c bioconda earlgrey=7.2.5
 
 # With mamba
-mamba create -n earlgrey -c conda-forge -c bioconda earlgrey=7.2.4
+mamba create -n earlgrey -c conda-forge -c bioconda earlgrey=7.2.5
 
 # Then run
 earlGrey
@@ -430,11 +475,11 @@ After this, you are ready to go! Just remember to activate the _intel_ terminal 
 
 A Docker container has been generated with none of Dfam 3.9, but with script generation to source required partitions
 
-I try to keep an up-to-date container in docker hub, but this might not always be the case depending on if I have had time to build and upload a new image. Currently, the recommended image ready for use is `-nodfam` version. Upon running the container interactively and running the command `earlGrey`, instructions will print to `stdout` and a script that you can use will be placed in your current working directory. After an initial setup and configuration in an interative version of the container, you can commit the changes (i.e. the Dfam configuration) using `docker commit [container_ID] yourdockerusername/earlgrey:version7.2.4-configured`. Then, you can run this container interactively, or non-interatively, to annotate focal genomes.
+I try to keep an up-to-date container in docker hub, but this might not always be the case depending on if I have had time to build and upload a new image. Currently, the recommended image ready for use is `-nodfam` version. Upon running the container interactively and running the command `earlGrey`, instructions will print to `stdout` and a script that you can use will be placed in your current working directory. After an initial setup and configuration in an interative version of the container, you can commit the changes (i.e. the Dfam configuration) using `docker commit [container_ID] yourdockerusername/earlgrey:version7.2.5-configured`. Then, you can run this container interactively, or non-interatively, to annotate focal genomes.
 
 ```
 # Interactive mode
-# Version 7.2.4 with no preconfigured partitions (RECOMMENDED!) - bind a directory, in my case the current directory using pwd
+# Version 7.2.5 with no preconfigured partitions (RECOMMENDED!) - bind a directory, in my case the current directory using pwd
 docker run -it -v 'pwd':/data/ tobybaril/earlgrey:latest-nodfam
 # change to library directory
 cd /data/
@@ -461,12 +506,12 @@ cd /data/
 docker ps -a
 
 # commit the modified container so you can use at will (replace yourdockerusername with your docker username)
-docker commit [container_ID] yourdockerusername/earlgrey:version7.2.4-configured
+docker commit [container_ID] yourdockerusername/earlgrey:version7.2.5-configured
 
 # you can then run non-interatively if required:
-docker run -v 'pwd':/data/ yourdockerusername/earlgrey:version7.2.4-configured earlGrey -g /data/GENOME.fasta -s nonInteractiveTest -o /data/ -t 8
+docker run -v 'pwd':/data/ yourdockerusername/earlgrey:version7.2.5-configured earlGrey -g /data/GENOME.fasta -s nonInteractiveTest -o /data/ -t 8
 
 # alternatively you can still run interactive sessions
-docker run -it -v 'pwd':/data/ yourdockerusername/earlgrey:version7.2.4-configured
+docker run -it -v 'pwd':/data/ yourdockerusername/earlgrey:version7.2.5-configured
 ``` 
 

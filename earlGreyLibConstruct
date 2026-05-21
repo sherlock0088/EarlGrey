@@ -4,7 +4,7 @@ set -eo pipefail
 usage()
 {
         echo "  #############################
-        earlGrey version 7.2.4 (Library Construction Only)
+        earlGrey version 7.2.5 (Library Construction Only)
         Required Parameters:
                 -g == genome.fasta
                 -s == species name
@@ -18,6 +18,7 @@ usage()
                 -f == Number flanking basepairs to extract (Default: 1000)
                 -n == Max number of sequences used to generate consensus sequences (Default: 20)
                 -a == minimum number of sequences required to build a consensus sequence (Default: 3)
+                -q == Suppress TEstrainer parallel progress bar (yes/no, Default: no, useful for batch/sbatch jobs)
                 -h == Show help
 
         Example Usage:
@@ -182,12 +183,7 @@ deNovo1()
 strainer()
 {
         cd ${OUTDIR}/${species}_strainer/
-	if [ "$ProcNum" -ge 4 ]; then
-		strainthreads=$(( ProcNum / 4 ))
-	else
-		strainthreads=$ProcNum
-	fi
-        ${SCRIPT_DIR}/TEstrainer/TEstrainer_for_earlGrey.sh -g $genome -l ${OUTDIR}/${species}_Database/${species}-families.fa -t ${strainthreads} -f $Flank -r $num -n $no_seq -m $min_seq
+        ${SCRIPT_DIR}/TEstrainer/TEstrainer_for_earlGrey.sh -g $genome -l ${OUTDIR}/${species}_Database/${species}-families.fa -t ${ProcNum} -f $Flank -r $num -n $no_seq -m $min_seq$([ "$quietBar" == "yes" ] && echo " -q")
         latestFile="$(realpath $(ls -td -- ${OUTDIR}/${species}_strainer/*/ | head -n 1) || true)/${species}-families.fa.strained"
         cp $latestFile ${OUTDIR}/${species}_strainer/
 }
@@ -201,12 +197,7 @@ strainerResume() {
         echo "ERROR: There are more TEstrainer directories than expected present"
         exit 2
     fi
-    if [ "$ProcNum" -ge 4 ]; then
-        strainthreads=$(( ProcNum / 4 ))
-    else
-        strainthreads=$ProcNum
-    fi
-    ${SCRIPT_DIR}/TEstrainer/TEstrainer_for_earlGrey.sh -g $genome -l ${OUTDIR}/${species}_Database/${species}-families.fa -t ${strainthreads} -f $Flank -r $num -n $no_seq -m $min_seq -d ${strainDataDir} -R
+    ${SCRIPT_DIR}/TEstrainer/TEstrainer_for_earlGrey.sh -g $genome -l ${OUTDIR}/${species}_Database/${species}-families.fa -t ${ProcNum} -f $Flank -r $num -n $no_seq -m $min_seq$([ "$quietBar" == "yes" ] && echo " -q") -d ${strainDataDir} -R
     latestFile="$(realpath $(ls -td -- ${OUTDIR}/${species}_strainer/*/ | head -n 1) || true)/${species}-families.fa.strained"
     cp $latestFile ${OUTDIR}/${species}_strainer/
 }
@@ -299,6 +290,14 @@ Checks()
                 echo "ERROR: teStrainer module not found, please check all modules are present and run the configure script in the Earl Grey directory before attempting to run Earl Grey"; exit 1
         fi
 
+        if [ "$quietBar" == "yes" ] ; then
+                quietBar=yes; echo "TEstrainer parallel progress bar will be suppressed"
+        elif [ -z "$quietBar" ] || [ "$quietBar" == "no" ]; then
+                quietBar=no; echo "TEstrainer parallel progress bar will be shown"
+        else
+                quietBar=no; echo "quietBar not specified using (yes/no). Using default parameter (no)."
+        fi
+
 	echo "Please cite the following paper when using this software:"
 	echo "Baril, T., Galbraith, J. and Hayward, A., 2024. Earl Grey: a fully automated user-friendly transposable element annotation and analysis pipeline. Molecular Biology and Evolution, 41(4), p.msae068."
 }
@@ -370,7 +369,7 @@ dfamCheck()
 
 # Main #
 
-while getopts g:s:o:t:f:i:r:l:n:a:h option
+while getopts g:s:o:t:f:i:r:l:n:a:q:h option
 do
         case "${option}" 
                 in
@@ -384,6 +383,7 @@ do
                 l) startCust=${OPTARG};;
                 n) no_seq=${OPTARG};;
                 a) min_seq=${OPTARG};;
+                q) quietBar=${OPTARG};;
                 h) usage; exit 0;; 
         esac
 done

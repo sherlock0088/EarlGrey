@@ -689,3 +689,84 @@ grep -n 'GENOME_SIZE\|SAMPLE_FLAG' earlGrey earlGreyLibConstruct
 
 **Expected for check 4:** Both scripts should show `GENOME_SIZE` and `SAMPLE_FLAG` variable assignments and the five-tier `if/elif/else` block inside `deNovo1`.
 
+---
+
+# Version 7.2.5 — TEstrainer thread-count fix and earlGreyLibConstruct quiet-bar support
+
+## Background
+
+Two issues were addressed:
+
+1. **Double division of threads passed to TEstrainer** (issue [#304](https://github.com/TobyBaril/EarlGrey/issues/304)): `earlGrey` and `earlGreyLibConstruct` were computing `strainthreads=$(( ProcNum / 4 ))` and passing this reduced count to `TEstrainer_for_earlGrey.sh`. Inside TEstrainer, the thread count is further divided by 4 to compute `MAFFT_THREADS` for parallel MAFFT jobs (each of which runs `mafft --thread 4`). This caused a double-divide: at 30 requested threads, TEstrainer received 7, then calculated `MAFFT_THREADS=1`, running only a single 4-thread MAFFT job at a time (4 actual CPU threads). The correct behaviour at 30 threads is `MAFFT_THREADS=7`, giving 7 × 4 = 28 concurrent MAFFT threads. The pre-division was a legacy artefact from a now-removed memory-heavy fork process in an older version of TEstrainer; its removal is safe because TEstrainer already has its own RAM-cap guard (`AVAIL_MEM_MB / 800` capping `THREADS` with a warning if a cap is applied).
+
+2. **Missing `-q` quietBar flag in `earlGreyLibConstruct`**: The `-q` flag to suppress TEstrainer's GNU parallel progress bar was added to `earlGrey` in v7.2.3, but was never propagated to `earlGreyLibConstruct`. Users running library-construction-only jobs had no way to suppress the progress bar for batch/sbatch workflows.
+
+## Changes made
+
+### `earlGrey` and `earlGreyLibConstruct` — TEstrainer thread-count fix
+
+Removed the `strainthreads=$(( ProcNum / 4 ))` calculation from both scripts and replaced the `-t ${strainthreads}` argument in the `strainer()` and `strainerResume()` function calls with `-t ${ProcNum}`, passing the full user-requested thread count directly to TEstrainer. TEstrainer's internal logic (`MAFFT_THREADS = THREADS / 4`, each MAFFT job using `--thread 4`) now correctly utilises the full CPU allocation:
+
+| Requested threads | Before fix (MAFFT CPU) | After fix (MAFFT CPU) |
+|---|---|---|
+| 8  | MAFFT_THREADS=1 → 4 threads | MAFFT_THREADS=2 → 8 threads |
+| 16 | MAFFT_THREADS=1 → 4 threads | MAFFT_THREADS=4 → 16 threads |
+| 30 | MAFFT_THREADS=1 → 4 threads | MAFFT_THREADS=7 → 28 threads |
+
+TEstrainer's existing RAM-cap guard ensures the full thread count is not applied when system memory is insufficient.
+
+---
+
+# Test dataset added (v7.2.5)
+
+## Background
+
+Users have frequently requested a way to verify that their Earl Grey installation is working correctly end-to-end, particularly after conda or Docker installs. A small but representative test genome is needed that:
+- Completes a full default-options run in a reasonable time (~30 minutes on a typical desktop)
+- Produces a meaningful TE annotation that exercises all pipeline stages
+- Has known expected outputs that can be used for comparison
+
+## Implementation
+
+Chromosome 1 of the Monarch Butterfly (*Danaus plexippus*; ~11 Mb) was selected as the test genome. It is small enough to run quickly but repeat-rich enough to exercise RepeatModeler, TEstrainer, RepeatMasker, RepeatCraft, and the divergence calculator.
+
+The test data were added to the `test/` directory of the repository:
+- `test/test.fasta` — chromosome 1 of *Danaus plexippus*
+- `test/test_summaryFiles.tar.gz` — expected `summaryFiles` output from a successful run with `earlGrey -g test/test.fasta -s test -o output_dir -t 16`
+
+The archive contains md5 checksums (`checksums.md5`) for all expected output files. Because RepeatModeler uses stochastic sampling, exact output files will vary between runs; users should compare the overall patterns in the high-level count table rather than expecting bitwise-identical results.
+
+Full instructions for running the test and interpreting results were added to the README under a new [Test Your Installation](#test-your-installation) section.
+
+---
+
+### `earlGreyLibConstruct` — quietBar support added
+
+The `-q` flag was fully implemented in `earlGreyLibConstruct` to match the existing behaviour in `earlGrey`:
+
+- **Usage text**: added `-q == Suppress TEstrainer parallel progress bar (yes/no, Default: no, useful for batch/sbatch jobs)`
+- **`getopts`**: added `q:` to the option string and `q) quietBar=${OPTARG};;` to the case block
+- **`Checks()` validation**: added the same yes/no guard as `earlGrey`, defaulting to `no` with a warning on invalid input
+- **`strainer()` and `strainerResume()`**: both TEstrainer call sites now append `$([ "$quietBar" == "yes" ] && echo " -q")`, identical to the `earlGrey` implementation
+
+## Static verification
+
+```bash
+cd /data/toby/EarlGrey
+
+# 1. Confirm earlGrey and earlGreyLibConstruct pass ProcNum directly to TEstrainer (no pre-division)
+grep -n 'TEstrainer_for_earlGrey.sh.*-t' earlGrey earlGreyLibConstruct
+
+# 2. Confirm strainthreads is no longer present in either script
+grep -n 'strainthreads' earlGrey earlGreyLibConstruct  # should return nothing
+
+# 3. Confirm quietBar is fully implemented in earlGreyLibConstruct
+grep -n 'quietBar' earlGreyLibConstruct
+```
+
+**Expected for check 1:** All TEstrainer invocations in both scripts show `-t ${ProcNum}`.
+
+**Expected for check 2:** No output.
+
+**Expected for check 3:** Six matches — usage text, getopts case, `Checks()` validation (three lines), and both TEstrainer call sites.
+

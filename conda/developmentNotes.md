@@ -770,3 +770,49 @@ grep -n 'quietBar' earlGreyLibConstruct
 
 **Expected for check 3:** Six matches — usage text, getopts case, `Checks()` validation (three lines), and both TEstrainer call sites.
 
+---
+
+# v7.2.6 — Fix Dfam 3.9 installation download URL
+
+## Background
+
+The `dfamCheck()` / `Checks()` function in `earlGrey`, `earlGreyLibConstruct`, and `earlGreyAnnotationOnly` generates a helper script (`configure_dfam39.sh`) when it detects that RepeatMasker has not yet been configured with Dfam 3.9 partitions. The generated script contained a `curl` command and a warning message pointing to `https://dfam.org/releases/current/families/FamDB/`. The `current` symlink on the Dfam release server now resolves to a release newer than Dfam 3.9, so users following the generated script would download the wrong database version.
+
+## Changes made
+
+In all three scripts (`earlGrey`, `earlGreyLibConstruct`, `earlGreyAnnotationOnly`), two strings were updated in the `dfamCheck()` / `Checks()` function:
+
+1. The warning message URL changed from:
+   ```
+   https://dfam.org/releases/current/families/FamDB/
+   ```
+   to:
+   ```
+   https://dfam.org/releases/Dfam_3.9/families/FamDB/
+   ```
+
+2. The `curl` command written into `configure_dfam39.sh` changed from:
+   ```bash
+   curl -o 'dfam39_full.#1.h5.gz' 'https://dfam.org/releases/current/families/FamDB/dfam39_full.[0-16].h5.gz'
+   ```
+   to:
+   ```bash
+   curl -o 'dfam39_full.#1.h5.gz' 'https://dfam.org/releases/Dfam_3.9/families/FamDB/dfam39_full.[0-16].h5.gz'
+   ```
+
+These are the only changes in this patch. No functional pipeline logic was altered.
+
+## Verification
+
+```bash
+# Confirm the old URL is no longer present in any of the three scripts
+grep -n 'releases/current' earlGrey earlGreyLibConstruct earlGreyAnnotationOnly  # should return nothing
+
+# Confirm the versioned URL is present in all three scripts
+grep -n 'releases/Dfam_3.9' earlGrey earlGreyLibConstruct earlGreyAnnotationOnly
+```
+
+**Expected for check 1:** No output.
+
+**Expected for check 2:** Six matches — the warning-message line and the curl-command line in each of the three scripts.
+

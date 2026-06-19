@@ -60,6 +60,7 @@ RUN tar -x -f RepeatScout-1.0.6.tar.gz \
 RUN tar -x -f RECON-1.08.tar.gz \
     && mv RECON-1.08 ../RECON \
     && cd ../RECON \
+    && sed -i 's/#include "string.h"/#include "string.h"\n#include <ctype.h>/' src/seqlist.h \
     && make -C src && make -C src install \
     && cp 00README bin/ \
     && sed -i 's#^\$path =.*#$path = "/opt/RECON/bin";#' scripts/recon.pl
@@ -187,8 +188,8 @@ ENV PYTHONIOENCODING=utf8
 RUN apt update && apt install build-essential -y --no-install-recommends
 RUN apt update && apt install libcurl4-openssl-dev -y && apt-get install libbz2-dev liblzma-dev libtiff-dev libfreetype6-dev pkgconf libfontconfig1-dev libharfbuzz-dev libfribidi-dev bc -y
 
-ARG USER_ID
-ARG GROUP_ID
+ARG USER_ID=1000
+ARG GROUP_ID=1000
 
 RUN addgroup --gid $GROUP_ID user
 RUN adduser --disabled-password --gecos '' --uid $USER_ID --gid $GROUP_ID --home /home/user user
@@ -198,21 +199,25 @@ RUN chown -R user /home/user
 RUN cd /home/user \
         && git clone https://github.com/ridgelab/SA-SSR \
         && cd SA-SSR/ \
-        && sed -i "s|PREFIX=/usr/local/bin|PREFIX=/home/user/SA-SSR/|g" Makefile && make && make install
+        && sed -i "s|PREFIX=/usr/local/bin|PREFIX=/home/user/SA-SSR/|g" Makefile \
+        && sed -i 's#^CXXFLAGS+=#CXXFLAGS+=-include cstdint #' Makefile \
+        && make && make install
 RUN chmod a+rwx /home/user/SA-SSR/bin/* /home/user/SA-SSR/*
 RUN chown -R user /home/user/SA-SSR/
+
+RUN /anaconda3/bin/conda create -y \
+        -p /home/user/earlgrey_env \
+        -c conda-forge \
+        -c bioconda \
+        earlgrey=7.2.6 \
+        earlgreypartea=0.1.8 \
+    && /anaconda3/bin/conda clean -afy \
+    && chown -R user:user /home/user/earlgrey_env
 
 USER user
 WORKDIR /home/user
 
-RUN git clone https://github.com/TobyBaril/EarlGrey \
-        && cd EarlGrey \
-        && chmod +x ./configureForDocker \
-        && eval "$(/anaconda3/bin/conda shell.bash  hook)" \
-        && ./configureForDocker 
-
-ENV PATH=$PATH:/home/user/EarlGrey/:/home/user/SA-SSR/bin/
-
+ENV PATH=/home/user/earlgrey_env/bin:$PATH:/home/user/SA-SSR/bin/
 #RUN echo "#!/bin/bash" > /work/start.sh \
 #        && echo 'eval "$(/anaconda3/bin/conda shell.bash  hook)"' >> /work/start.sh \
 #        && echo "conda activate earlGrey" >> /work/start.sh \
